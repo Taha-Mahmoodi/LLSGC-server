@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.github/workflows/release.yml'
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Typecheck & build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Smoke test (server boots)
+        shell: bash
+        run: |
+          node dist/server/index.js --port 0 --no-open --no-auto-start &
+          PID=$!
+          sleep 3
+          if kill -0 $PID 2>/dev/null; then
+            echo "✓ server started"
+            kill $PID || true
+          else
+            echo "✗ server did not stay running"
+            exit 1
+          fi
