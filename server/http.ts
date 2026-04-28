@@ -1,20 +1,12 @@
 import express from 'express';
 import { createServer, Server as HttpServer } from 'node:http';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import { handlers } from './handlers.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export function startHttpServer(port: number, host: string): HttpServer {
   const app = express();
   app.use(express.json({ limit: '2mb' }));
-
-  app.use((req, _res, next) => {
-    if (host === '127.0.0.1' || host === 'localhost') return next();
-    next();
-  });
 
   app.post('/api/call', async (req, res) => {
     const { channel, args = [] } = req.body ?? {};
@@ -36,35 +28,109 @@ export function startHttpServer(port: number, host: string): HttpServer {
   });
 
   app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, version: process.env.LLSGC_VERSION ?? 'dev' });
+    res.json({
+      ok: true,
+      version: process.env.LLSGC_VERSION ?? 'dev',
+      mode: getServeMode(),
+    });
   });
 
-  const clientDir = resolveClientDir();
-  if (clientDir) {
-    app.use(express.static(clientDir));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.join(clientDir, 'index.html'));
-    });
-  } else {
-    app.get('*', (_req, res) => {
-      res
-        .status(404)
-        .send('Client bundle not built. Run `npm run build` or `npm run dev`.');
-    });
-  }
+  attachClient(app);
 
   const server = createServer(app);
   server.listen(port, host);
   return server;
 }
 
+type ServeMode = 'sea' | 'filesystem' | 'none';
+
+function getServeMode(): ServeMode {
+  if (seaInfo.enabled) return 'sea';
+  return resolveClientDir() ? 'filesystem' : 'none';
+}
+
+function attachClient(app: express.Express) {
+  if (seaInfo.enabled) {
+    attachSeaClient(app);
+    return;
+  }
+  const clientDir = resolveClientDir();
+  if (clientDir) {
+    app.use(express.static(clientDir));
+    app.get('*', (_req, res) => {
+      res.sendFile(path.join(clientDir, 'index.html'));
+    });
+    return;
+  }
+  app.get('*', (_req, res) => {
+    res
+      .status(404)
+      .send('Client bundle not built. Run `npm run build` or `npm run dev`.');
+  });
+}
+
+function attachSeaClient(app: express.Express) {
+  app.use((req, res, next) => {
+    if (req.path.startsWith('/api/') || req.path === '/ws') return next();
+    const target = req.path === '/' ? '/index.html' : req.path;
+    const buf = readSeaAsset(target);
+    if (!buf) return next();
+    res.type(path.extname(target) || '.html');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(buf);
+  });
+  app.get('*', (_req, res) => {
+    const buf = readSeaAsset('/index.html');
+    if (buf) {
+      res.type('html');
+      res.send(buf);
+    } else {
+      res.status(404).send('Client bundle missing in SEA build.');
+    }
+  });
+}
+
 function resolveClientDir(): string | null {
+  const exeDir = path.dirname(process.execPath);
+  const cwd = process.cwd();
   const candidates = [
-    path.join(__dirname, '../client'),
-    path.join(__dirname, '../../dist/client'),
+    path.join(cwd, 'dist/client'),
+    path.join(cwd, 'client'),
+    path.join(exeDir, 'client'),
+    path.join(exeDir, '../client'),
+    path.join(exeDir, 'resources/app/dist/client'),
   ];
   for (const c of candidates) {
     if (fs.existsSync(path.join(c, 'index.html'))) return c;
   }
   return null;
+}
+
+interface SeaInfo {
+  enabled: boolean;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  api: any | null;
+}
+
+const seaInfo: SeaInfo = (() => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require('node:sea');
+    if (mod && typeof mod.isSea === 'function' && mod.isSea()) {
+      return { enabled: true, api: mod };
+    }
+  } catch {
+    /* node < 20 or not bundled with SEA */
+  }
+  return { enabled: false, api: null };
+})();
+
+function readSeaAsset(name: string): Buffer | null {
+  if (!seaInfo.enabled || !seaInfo.api) return null;
+  try {
+    const arr = seaInfo.api.getAsset(name);
+    return Buffer.from(arr);
+  } catch {
+    return null;
+  }
 }

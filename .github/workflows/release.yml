@@ -22,28 +22,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
-    name: Build cross-platform tarball
+  meta:
+    name: Determine version
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      is_release: ${{ steps.v.outputs.is_release }}
+      tag_name: ${{ steps.v.outputs.tag_name }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Determine version
-        id: version
+      - uses: actions/checkout@v4
+      - id: v
         shell: bash
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
@@ -65,40 +53,165 @@ jobs:
           echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
           echo "::notice title=Build version::${VERSION} (release=${IS_RELEASE})"
 
-      - name: Sync package.json version
-        shell: bash
-        run: |
-          npm version "${{ steps.version.outputs.version }}" --no-git-tag-version --allow-same-version
-
-      - name: Build
-        run: npm run build
-
+  tarball:
+    name: Build npm tarball
+    needs: meta
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm version "${{ needs.meta.outputs.version }}" --no-git-tag-version --allow-same-version
+      - run: npm run build
       - name: Pack
         shell: bash
         run: |
           mkdir -p release
           npm pack --pack-destination release/
           ls -la release/
-
-      - name: Upload tarball as workflow artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: llsgc-server-${{ steps.version.outputs.version }}
+          name: tarball-${{ needs.meta.outputs.version }}
           path: release/*.tgz
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish GitHub Release
-        if: steps.version.outputs.is_release == 'true'
-        uses: softprops/action-gh-release@v2
+  windows-exe:
+    name: Build single-binary llsgc-server.exe (Node SEA)
+    needs: meta
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
         with:
-          tag_name: ${{ steps.version.outputs.tag_name }}
-          name: LLSGC-server ${{ steps.version.outputs.version }}
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Sync version
+        shell: bash
+        run: npm version "${{ needs.meta.outputs.version }}" --no-git-tag-version --allow-same-version
+
+      - name: Build SEA bundle
+        run: npm run build:sea
+
+      - name: Generate SEA blob
+        shell: bash
+        run: |
+          mkdir -p release
+          node --experimental-sea-config dist/sea/sea-config.json
+          ls -la dist/sea/
+
+      - name: Copy node.exe → llsgc-server.exe
+        shell: bash
+        run: |
+          cp "$(node -e "process.stdout.write(process.execPath)")" release/llsgc-server.exe
+          ls -la release/
+
+      - name: Inject SEA blob via postject
+        shell: bash
+        run: |
+          npx --yes postject release/llsgc-server.exe NODE_SEA_BLOB \
+            dist/sea/sea-prep.blob \
+            --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
+
+      - name: Smoke test the .exe
+        shell: bash
+        run: |
+          ./release/llsgc-server.exe --version || true
+          # Boot, hit /api/health, kill
+          ./release/llsgc-server.exe --port 47298 --no-open --no-auto-start &
+          PID=$!
+          sleep 4
+          curl -fsS http://127.0.0.1:47298/api/health
+          echo ""
+          kill $PID || true
+          wait 2>/dev/null || true
+
+      - name: Report sizes (raw)
+        shell: bash
+        run: |
+          echo "=== raw sizes ==="
+          ls -la release/llsgc-server.exe
+          du -h release/llsgc-server.exe
+
+      - name: Install UPX
+        run: choco install -y upx
+
+      - name: Compress with UPX (best)
+        shell: bash
+        continue-on-error: true
+        run: |
+          cp release/llsgc-server.exe release/llsgc-server.uncompressed.exe
+          upx --best --lzma release/llsgc-server.exe || \
+            (echo "UPX failed; restoring uncompressed" && \
+             cp release/llsgc-server.uncompressed.exe release/llsgc-server.exe)
+
+      - name: Verify compressed exe still runs
+        shell: bash
+        run: |
+          ./release/llsgc-server.exe --version || (echo "compressed exe broken — restoring uncompressed" && cp release/llsgc-server.uncompressed.exe release/llsgc-server.exe)
+          ./release/llsgc-server.exe --port 47297 --no-open --no-auto-start &
+          PID=$!
+          sleep 4
+          curl -fsS http://127.0.0.1:47297/api/health
+          echo ""
+          kill $PID || true
+
+      - name: Report sizes (final)
+        shell: bash
+        run: |
+          echo "=== final sizes ==="
+          ls -la release/
+          rm -f release/llsgc-server.uncompressed.exe || true
+
+      - name: Rename for release
+        shell: bash
+        run: |
+          cd release
+          mv llsgc-server.exe "LLSGC-server-${{ needs.meta.outputs.version }}.exe"
+          ls -la
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe-${{ needs.meta.outputs.version }}
+          path: release/*.exe
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish GitHub Release
+    needs: [meta, tarball, windows-exe]
+    if: needs.meta.outputs.is_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Show artifacts
+        shell: bash
+        run: ls -la artifacts/
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.meta.outputs.tag_name }}
+          name: LLSGC-server ${{ needs.meta.outputs.version }}
           generate_release_notes: true
           draft: false
           prerelease: false
           fail_on_unmatched_files: false
           files: |
-            release/*.tgz
+            artifacts/*.exe
+            artifacts/*.tgz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
