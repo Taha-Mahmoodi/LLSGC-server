@@ -1,11 +1,15 @@
 import type {
   AppSettings,
+  CommonPort,
   CustomServer,
   CustomServerInput,
   DetectedServer,
   FirewallRule,
+  HostEntryInput,
+  HostsInfo,
   IpcResult,
   LogLine,
+  PortCheckResult,
   ProcessDetails,
   SystemStats,
 } from '@shared/types';
@@ -162,6 +166,15 @@ export interface BrowserApi {
   getSettings(): Promise<IpcResult<AppSettings>>;
   updateSettings(patch: Partial<AppSettings>): Promise<IpcResult<AppSettings>>;
 
+  listHosts(): Promise<IpcResult<HostsInfo>>;
+  saveHost(input: HostEntryInput): Promise<IpcResult<any>>;
+  removeHost(id: string): Promise<IpcResult>;
+  toggleHost(id: string, enabled: boolean): Promise<IpcResult>;
+
+  checkPort(port: number): Promise<IpcResult<PortCheckResult>>;
+  checkPorts(ports: number[]): Promise<IpcResult<PortCheckResult[]>>;
+  listCommonPorts(): Promise<IpcResult<CommonPort[]>>;
+
   quit(): Promise<void>;
   minimize(): Promise<void>;
   maximize(): Promise<void>;
@@ -200,6 +213,15 @@ export const api: BrowserApi = {
 
   getSettings: () => invoke(IPC.settingsGet),
   updateSettings: patch => invoke(IPC.settingsUpdate, patch),
+
+  listHosts: () => invoke(IPC.hostsList),
+  saveHost: input => invoke(IPC.hostsSave, input),
+  removeHost: id => invoke(IPC.hostsRemove, id),
+  toggleHost: (id, enabled) => invoke(IPC.hostsToggle, id, enabled),
+
+  checkPort: port => invoke(IPC.portsCheck, port),
+  checkPorts: ports => invoke(IPC.portsCheckMany, ports),
+  listCommonPorts: () => invoke(IPC.portsCommon),
 
   quit: async () => undefined,
   minimize: async () => undefined,

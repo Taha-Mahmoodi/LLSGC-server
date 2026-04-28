@@ -6,7 +6,10 @@ import {
   CustomServer,
   CustomServerInput,
   DetectedServer,
+  HostEntryInput,
+  HostsInfo,
   IpcResult,
+  PortCheckResult,
   SystemStats,
 } from '../shared/types.js';
 import { scanListeningPorts } from './services/port-scanner.js';
@@ -21,6 +24,17 @@ import {
 import { getSystemStats } from './services/system-stats.js';
 import { customManager } from './services/custom-manager.js';
 import { store } from './services/store.js';
+import {
+  readHosts,
+  saveHostEntry,
+  removeHostEntry,
+  toggleHostEntry,
+} from './services/hosts.js';
+import {
+  checkPort,
+  checkPorts,
+  listCommonPorts,
+} from './services/port-check.js';
 
 const execAsync = promisify(exec);
 
@@ -153,6 +167,40 @@ export const handlers: Record<string, Handler> = {
   [IPC.settingsUpdate]: async (patch: Partial<AppSettings>): Promise<IpcResult<AppSettings>> => {
     return ok(store.updateSettings(patch));
   },
+
+  [IPC.hostsList]: async (): Promise<IpcResult<HostsInfo>> => {
+    try {
+      return ok(await readHosts());
+    } catch (err) {
+      return fail(err);
+    }
+  },
+
+  [IPC.hostsSave]: async (input: HostEntryInput): Promise<IpcResult<any>> => {
+    const r = await saveHostEntry(input);
+    return r.ok ? ok({ entry: r.entry }) : fail(r.error || 'Save failed');
+  },
+
+  [IPC.hostsRemove]: async (id: string): Promise<IpcResult> => {
+    const r = await removeHostEntry(id);
+    return r.ok ? ok() : fail(r.error || 'Remove failed');
+  },
+
+  [IPC.hostsToggle]: async (id: string, enabled: boolean): Promise<IpcResult> => {
+    const r = await toggleHostEntry(id, enabled);
+    return r.ok ? ok() : fail(r.error || 'Toggle failed');
+  },
+
+  [IPC.portsCheck]: async (port: number): Promise<IpcResult<PortCheckResult>> => {
+    return ok(await checkPort(port));
+  },
+
+  [IPC.portsCheckMany]: async (ports: number[]): Promise<IpcResult<PortCheckResult[]>> => {
+    if (!Array.isArray(ports)) return fail('ports must be an array');
+    return ok(await checkPorts(ports));
+  },
+
+  [IPC.portsCommon]: async (): Promise<IpcResult<any>> => ok(listCommonPorts()),
 
   [IPC.appPlatform]: async (): Promise<IpcResult<{ platform: string; isWindows: boolean }>> => {
     return ok({ platform: process.platform, isWindows: process.platform === 'win32' });

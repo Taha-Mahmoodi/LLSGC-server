@@ -15,7 +15,9 @@ await build({
   banner: {
     js: '#!/usr/bin/env node\nimport { createRequire } from "node:module"; const require = createRequire(import.meta.url);',
   },
-  external: ['pidusage'],
+  // Bundle every npm dep including pidusage so the lite zip (which has
+  // no node_modules folder) can run with just `node server.js`.
+  external: [],
   minify: false,
   sourcemap: false,
   logLevel: 'info',

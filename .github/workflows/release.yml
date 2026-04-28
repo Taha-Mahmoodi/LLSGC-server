@@ -54,7 +54,7 @@ jobs:
           echo "::notice title=Build version::${VERSION} (release=${IS_RELEASE})"
 
   tarball:
-    name: Build npm tarball
+    name: Build npm tarball + lite zip
     needs: meta
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -67,16 +67,80 @@ jobs:
       - run: npm ci
       - run: npm version "${{ needs.meta.outputs.version }}" --no-git-tag-version --allow-same-version
       - run: npm run build
-      - name: Pack
+
+      - name: Pack npm tarball
         shell: bash
         run: |
           mkdir -p release
           npm pack --pack-destination release/
           ls -la release/
+
+      - name: Assemble lite zip (no Node bundled — for users who already have Node 20+)
+        shell: bash
+        run: |
+          STAGE="release/stage/llsgc-server"
+          mkdir -p "$STAGE/client"
+          cp dist/server/index.js "$STAGE/server.js"
+          cp -R dist/client/. "$STAGE/client/"
+
+          cat > "$STAGE/llsgc-server.cmd" <<'EOF'
+          @echo off
+          setlocal
+          where node >nul 2>nul
+          if errorlevel 1 (
+            echo.
+            echo LLSGC-server requires Node.js 20 or later.
+            echo Install from https://nodejs.org/ ^(LTS is fine^), then run this again.
+            echo Or download the bigger LLSGC-server-X.Y.Z.exe ^(Node bundled^) from the GitHub release.
+            echo.
+            pause
+            exit /b 1
+          )
+          node "%~dp0server.js" %*
+          EOF
+
+          cat > "$STAGE/llsgc-server.sh" <<'EOF'
+          #!/usr/bin/env bash
+          set -e
+          if ! command -v node >/dev/null 2>&1; then
+            echo "LLSGC-server requires Node.js 20 or later. Install from https://nodejs.org/" >&2
+            exit 1
+          fi
+          DIR="$(cd "$(dirname "$0")" && pwd)"
+          exec node "$DIR/server.js" "$@"
+          EOF
+          chmod +x "$STAGE/llsgc-server.sh"
+
+          cat > "$STAGE/README.txt" <<'EOF'
+          LLSGC-server — Live Local Servers GUI Controller (lite distribution)
+
+          Requires Node.js 20 or later (https://nodejs.org/). If you don't have Node,
+          download the bundled LLSGC-server-X.Y.Z.exe instead — it ships Node inside.
+
+          Run:
+            Windows : double-click llsgc-server.cmd
+            macOS / Linux : ./llsgc-server.sh
+
+          Then open http://localhost:47291 in your browser (it auto-opens by default).
+
+          Flags:
+            --port <n>        listen on a different port (default 47291)
+            --host <ip>       bind address (default 127.0.0.1)
+            --no-open         do not auto-open the browser
+            --no-auto-start   skip auto-starting saved launchers
+          EOF
+
+          VER="${{ needs.meta.outputs.version }}"
+          (cd release/stage && zip -r "../LLSGC-server-${VER}-lite.zip" llsgc-server)
+          rm -rf release/stage
+          ls -la release/
+
       - uses: actions/upload-artifact@v4
         with:
           name: tarball-${{ needs.meta.outputs.version }}
-          path: release/*.tgz
+          path: |
+            release/*.tgz
+            release/*-lite.zip
           if-no-files-found: error
           retention-days: 30
 
@@ -213,5 +277,6 @@ jobs:
           files: |
             artifacts/*.exe
             artifacts/*.tgz
+            artifacts/*-lite.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
