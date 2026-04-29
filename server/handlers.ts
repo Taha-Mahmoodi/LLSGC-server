@@ -35,6 +35,7 @@ import {
   checkPorts,
   listCommonPorts,
 } from './services/port-check.js';
+import { reachableUrls } from './services/network-info.js';
 
 const execAsync = promisify(exec);
 
@@ -244,6 +245,7 @@ async function collectServers(): Promise<DetectedServer[]> {
       if (looksLikeSystemProcess(info?.name)) continue;
     }
     const startedAt = info?.startedAt ?? Date.now();
+    const urls = reachableUrls(port.address, port.port, port.protocol);
     out.push({
       pid: port.pid,
       name: info?.name ?? `pid:${port.pid}`,
@@ -256,7 +258,8 @@ async function collectServers(): Promise<DetectedServer[]> {
       memoryBytes: info?.memoryBytes ?? 0,
       uptimeSec: Math.max(0, (Date.now() - startedAt) / 1000),
       startedAt,
-      url: buildUrl(port.address, port.port, port.protocol),
+      url: urls[0] ?? buildUrl(port.address, port.port, port.protocol),
+      urls: urls.length > 0 ? urls : undefined,
       customId: custom?.id,
     });
   }
