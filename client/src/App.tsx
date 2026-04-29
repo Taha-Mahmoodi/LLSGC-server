@@ -4,6 +4,7 @@ import { Sidebar, type ViewKey } from './components/layout/Sidebar';
 import { ToastViewport } from './components/ui/Toast';
 import { TooltipProvider } from './components/ui/Tooltip';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { CommandPalette } from './components/CommandPalette';
 import { Dashboard } from './pages/Dashboard';
 import { Servers } from './pages/Servers';
 import { Ports } from './pages/Ports';
@@ -11,6 +12,7 @@ import { Custom } from './pages/Custom';
 import { Firewall } from './pages/Firewall';
 import { Hosts } from './pages/Hosts';
 import { Logs } from './pages/Logs';
+import { Diagnostics } from './pages/Diagnostics';
 import { Settings as SettingsPage } from './pages/Settings';
 import { api } from './lib/api';
 import { useStore } from './lib/store';
@@ -22,6 +24,7 @@ export default function App() {
     () => new Set<ViewKey>(['dashboard']),
   );
 
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const setSystemStats = useStore(s => s.setSystemStats);
   const setServers = useStore(s => s.setServers);
   const setCustomServers = useStore(s => s.setCustomServers);
@@ -67,6 +70,23 @@ export default function App() {
     };
   }, [setSystemStats, setServers, setCustomServers, appendLog, setSettings]);
 
+  // Global Ctrl+K (Cmd+K on macOS) and "/" to open the command palette.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const isInput = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA';
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen(true);
+      } else if (e.key === '/' && !isInput && !paletteOpen) {
+        e.preventDefault();
+        setPaletteOpen(true);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [paletteOpen]);
+
   return (
     <TooltipProvider>
       <div className="flex h-screen w-screen flex-col text-fg">
@@ -109,6 +129,11 @@ export default function App() {
                 <Logs />
               </ErrorBoundary>
             </CachedPage>
+            <CachedPage active={view === 'diagnostics'} mounted={visited.has('diagnostics')}>
+              <ErrorBoundary scope="diagnostics">
+                <Diagnostics onJump={navigate} />
+              </ErrorBoundary>
+            </CachedPage>
             <CachedPage active={view === 'settings'} mounted={visited.has('settings')}>
               <ErrorBoundary scope="settings">
                 <SettingsPage />
@@ -117,6 +142,11 @@ export default function App() {
           </main>
         </div>
         <ToastViewport />
+        <CommandPalette
+          open={paletteOpen}
+          onOpenChange={setPaletteOpen}
+          onNavigate={navigate}
+        />
       </div>
     </TooltipProvider>
   );

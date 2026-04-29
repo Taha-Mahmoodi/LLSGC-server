@@ -4,14 +4,17 @@ import type {
   CustomServer,
   CustomServerInput,
   DetectedServer,
+  DiagnosticsReport,
   FirewallRule,
   HostEntryInput,
   HostsInfo,
+  HttpProbeResult,
   IpcResult,
   LogLine,
   PortCheckResult,
   ProcessDetails,
   SystemStats,
+  UpdateState,
 } from '@shared/types';
 import { IPC, type IpcChannel } from '@shared/channels';
 import { useStore } from './store';
@@ -175,6 +178,17 @@ export interface BrowserApi {
   checkPorts(ports: number[]): Promise<IpcResult<PortCheckResult[]>>;
   listCommonPorts(): Promise<IpcResult<CommonPort[]>>;
 
+  probeUrl(
+    url: string,
+    opts?: { timeoutMs?: number; method?: 'GET' | 'HEAD' },
+  ): Promise<IpcResult<HttpProbeResult>>;
+
+  runDiagnostics(): Promise<IpcResult<DiagnosticsReport>>;
+
+  checkForUpdates(): Promise<IpcResult<UpdateState>>;
+  applyUpdate(): Promise<IpcResult>;
+  onUpdateState(h: (state: UpdateState) => void): () => void;
+
   quit(): Promise<void>;
   minimize(): Promise<void>;
   maximize(): Promise<void>;
@@ -222,6 +236,14 @@ export const api: BrowserApi = {
   checkPort: port => invoke(IPC.portsCheck, port),
   checkPorts: ports => invoke(IPC.portsCheckMany, ports),
   listCommonPorts: () => invoke(IPC.portsCommon),
+
+  probeUrl: (url, opts) => invoke(IPC.serversProbe, url, opts),
+  runDiagnostics: () => invoke(IPC.diagnosticsRun),
+
+  // Updater is desktop-only — no-ops on the web
+  checkForUpdates: async () => ({ ok: true, data: { kind: 'idle' as const } }),
+  applyUpdate: async () => ({ ok: false, error: 'Auto-update is desktop-only.' }),
+  onUpdateState: () => () => undefined,
 
   quit: async () => undefined,
   minimize: async () => undefined,
